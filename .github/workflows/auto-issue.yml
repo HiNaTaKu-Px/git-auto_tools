@@ -1,0 +1,87 @@
+name: Auto Label Closed Issue
+
+on:
+  push:
+    branches:
+      - main  # または master (お使いのブランチ名に合わせてください)
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Process Closed Issue based on Commit Message
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commitMessage = context.payload.head_commit.message;
+            console.log(`Commit message: ${commitMessage}`);
+
+            // コミットメッセージから "c-1" などの連番パターンを抽出
+            const match = commitMessage.match(/^(c-\d+)/);
+            if (!match) {
+              console.log("連番パターン（c-数字）が見つからないためスキップします。");
+              return;
+            }
+            const labelName = match[1]; // 例: "c-1"
+            console.log(`抽出されたラベル: ${labelName}`);
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // 1. クローズされたIssueを新しい順に取得する
+            const issues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: "closed",
+              sort: "updated",
+              direction: "desc",
+              per_page: 30
+            });
+
+            if (issues.data.length === 0) {
+              console.log("クローズされたIssueが存在しないため終了します。");
+              return;
+            }
+
+            // 2. 「まだこのラベル（c-x）がついていない」クローズ済みIssueを探す
+            const targetIssue = issues.data.find(issue => {
+              const hasThisLabel = issue.labels.some(label => label.name === labelName);
+              return !hasThisLabel; // ラベルがついていなければ対象
+            });
+
+            if (!targetIssue) {
+              console.log(`ラベル "${labelName}" がまだ付いていないクローズ済みIssueは見つかりませんでした。`);
+              return;
+            }
+
+            console.log(`対象のクローズ済み Issue #${targetIssue.number} にラベルを付与します。`);
+
+            // 3. ラベルが存在しなければ作成する（カラーは #c5def5 に固定）
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: labelName });
+            } catch (error) {
+              console.log(`ラベル "${labelName}" が存在しないため作成します。`);
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: labelName,
+                color: "c5def5",
+                description: "Auto generated commit label"
+              });
+            }
+
+            // 4. 対象のクローズ済みIssueにラベルを付与（ステータス変更や新規クローズはしない）
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: targetIssue.number,
+              labels: [labelName]
+            });
+
+            console.log(`✨ クローズ済み Issue #${targetIssue.number} にラベル ${labelName} を付与しました！`);
