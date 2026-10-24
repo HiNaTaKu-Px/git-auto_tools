@@ -41,7 +41,7 @@ jobs:
               state: "closed",
               sort: "updated",
               direction: "desc",
-              per_page: 30
+              per_page: 50
             });
 
             if (issues.data.length === 0) {
@@ -49,18 +49,28 @@ jobs:
               return;
             }
 
-            // 2. 「まだこのラベル（c-x）がついていない」クローズ済みIssueを探す
-            const targetIssue = issues.data.find(issue => {
-              const hasThisLabel = issue.labels.some(label => label.name === labelName);
-              return !hasThisLabel; // ラベルがついていなければ対象
+            // 2. フィルタリング：
+            //   - "Not Planned" としてクローズされたものは除外する
+            //   - すでに何らかの "c-数字" ラベルがついていれば除外する
+            const targetIssues = issues.data.filter(issue => {
+              // Not Planned (対応しない) としてクローズされたものはスルーする
+              if (issue.state_reason === "not_planned") {
+                return false;
+              }
+
+              // 既に何らかの "c-数字" という形式のラベルがついているかチェック
+              const hasAnyCLabel = issue.labels.some(label => /^c-\d+$/.test(label.name));
+              
+              // "c-数字" がひとつもついていないものだけを対象にする
+              return !hasAnyCLabel;
             });
 
-            if (!targetIssue) {
-              console.log(`ラベル "${labelName}" がまだ付いていないクローズ済みIssueは見つかりませんでした。`);
+            if (targetIssues.length === 0) {
+              console.log(`条件に合致する（c-系ラベル未付与かつNot Plannedでない）クローズ済みIssueは見つかりませんでした。`);
               return;
             }
 
-            console.log(`対象のクローズ済み Issue #${targetIssue.number} にラベルを付与します。`);
+            console.log(`対象のクローズ済み Issue ${targetIssues.length}件 にラベルを付与します。`);
 
             // 3. ラベルが存在しなければ作成する（カラーは #c5def5 に固定）
             try {
@@ -76,12 +86,13 @@ jobs:
               });
             }
 
-            // 4. 対象のクローズ済みIssueにラベルを付与（ステータス変更や新規クローズはしない）
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: targetIssue.number,
-              labels: [labelName]
-            });
-
-            console.log(`✨ クローズ済み Issue #${targetIssue.number} にラベル ${labelName} を付与しました！`);
+            // 4. 対象のクローズ済みIssueすべてにラベルを付与する
+            for (const targetIssue of targetIssues) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: targetIssue.number,
+                labels: [labelName]
+              });
+              console.log(`✨ クローズ済み Issue #${targetIssue.number} にラベル ${labelName} を付与しました！`);
+            }
